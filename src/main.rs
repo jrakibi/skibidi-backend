@@ -11,8 +11,14 @@ use std::sync::Mutex;
 use bdk::bitcoin::{Address, Network};
 use bdk::descriptor::Segwitv0;
 
+mod lightning;
+use lightning::{LightningManager, LightningInvoice, LightningPayment};
+
 // Global wallet storage (in-memory for testing)
 type WalletStorage = Mutex<HashMap<String, Wallet<MemoryDatabase>>>;
+
+// Global Lightning manager
+type LightningStorage = Mutex<Option<LightningManager>>;
 
 // Blockchain backend configuration
 #[derive(Debug, Clone)]
@@ -87,6 +93,23 @@ struct SendBitcoinRequest {
 #[derive(Deserialize)]
 struct WalletRequest {
     wallet_id: String,
+}
+
+#[derive(Deserialize)]
+struct CreateLightningInvoiceRequest {
+    amount_msats: Option<u64>,
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct PayLightningInvoiceRequest {
+    bolt11: String,
+}
+
+#[derive(Deserialize)]
+struct PayLnurlRequest {
+    lnurl: String,
+    amount_msats: u64,
 }
 
 fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatabase>, String), String> {
@@ -547,24 +570,200 @@ async fn health_check() -> impl Responder {
     }))
 }
 
+// Lightning Network Endpoints
+
+#[post("/lightning/create-invoice")]
+async fn create_lightning_invoice(
+    request: web::Json<CreateLightningInvoiceRequest>,
+    lightning_storage: web::Data<LightningStorage>
+) -> ActixResult<HttpResponse> {
+    let mut lightning_guard = lightning_storage.lock().unwrap();
+    
+    // Initialize Lightning manager if not exists
+    if lightning_guard.is_none() {
+        match LightningManager::new() {
+            Ok(manager) => *lightning_guard = Some(manager),
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to initialize Lightning: {}", e)),
+            })),
+        }
+    }
+
+    let lightning_manager = lightning_guard.as_ref().unwrap();
+    
+    match lightning_manager.create_invoice(request.amount_msats, request.description.clone()) {
+        Ok(invoice) => Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(invoice),
+            error: None,
+        })),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to create invoice: {}", e)),
+        })),
+    }
+}
+
+#[post("/lightning/pay-invoice")]
+async fn pay_lightning_invoice(
+    request: web::Json<PayLightningInvoiceRequest>,
+    lightning_storage: web::Data<LightningStorage>
+) -> ActixResult<HttpResponse> {
+    let mut lightning_guard = lightning_storage.lock().unwrap();
+    
+    // Initialize Lightning manager if not exists
+    if lightning_guard.is_none() {
+        match LightningManager::new() {
+            Ok(manager) => *lightning_guard = Some(manager),
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to initialize Lightning: {}", e)),
+            })),
+        }
+    }
+
+    let lightning_manager = lightning_guard.as_ref().unwrap();
+    
+    // Clone the manager to avoid holding the lock during async operation
+    match lightning_manager.pay_invoice(request.bolt11.clone()).await {
+        Ok(payment) => Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(payment),
+            error: None,
+        })),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Payment failed: {}", e)),
+        })),
+    }
+}
+
+#[post("/lightning/pay-lnurl")]
+async fn pay_lnurl(
+    request: web::Json<PayLnurlRequest>,
+    lightning_storage: web::Data<LightningStorage>
+) -> ActixResult<HttpResponse> {
+    let mut lightning_guard = lightning_storage.lock().unwrap();
+    
+    // Initialize Lightning manager if not exists
+    if lightning_guard.is_none() {
+        match LightningManager::new() {
+            Ok(manager) => *lightning_guard = Some(manager),
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to initialize Lightning: {}", e)),
+            })),
+        }
+    }
+
+    let lightning_manager = lightning_guard.as_ref().unwrap();
+    
+    // First decode LNURL
+    match lightning_manager.decode_lnurl(request.lnurl.clone()).await {
+        Ok(lnurl_request) => {
+            // Check amount limits
+            if request.amount_msats < lnurl_request.min_sendable || request.amount_msats > lnurl_request.max_sendable {
+                return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Amount {} msats is outside allowed range ({}-{})", 
+                        request.amount_msats, lnurl_request.min_sendable, lnurl_request.max_sendable)),
+                }));
+            }
+
+            // Pay via LNURL callback
+            match lightning_manager.pay_lnurl(lnurl_request.callback, request.amount_msats).await {
+                Ok(payment) => Ok(HttpResponse::Ok().json(ApiResponse {
+                    success: true,
+                    data: Some(payment),
+                    error: None,
+                })),
+                Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                    success: false,
+                    data: None,
+                    error: Some(format!("LNURL payment failed: {}", e)),
+                })),
+            }
+        },
+        Err(e) => Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Invalid LNURL: {}", e)),
+        })),
+    }
+}
+
+#[get("/lightning/payments")]
+async fn get_lightning_payments(
+    lightning_storage: web::Data<LightningStorage>
+) -> ActixResult<HttpResponse> {
+    let lightning_guard = lightning_storage.lock().unwrap();
+    
+    if let Some(lightning_manager) = lightning_guard.as_ref() {
+        let payments = lightning_manager.list_payments();
+        Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(payments),
+            error: None,
+        }))
+    } else {
+        Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(Vec::<LightningPayment>::new()),
+            error: None,
+        }))
+    }
+}
+
+#[get("/lightning/invoices")]
+async fn get_lightning_invoices(
+    lightning_storage: web::Data<LightningStorage>
+) -> ActixResult<HttpResponse> {
+    let lightning_guard = lightning_storage.lock().unwrap();
+    
+    if let Some(lightning_manager) = lightning_guard.as_ref() {
+        let invoices = lightning_manager.list_invoices();
+        Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(invoices),
+            error: None,
+        }))
+    } else {
+        Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(Vec::<LightningInvoice>::new()),
+            error: None,
+        }))
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let wallet_storage = web::Data::new(Mutex::new(HashMap::<String, Wallet<MemoryDatabase>>::new()));
+    let lightning_storage = web::Data::new(LightningStorage::new(None));
     
     println!("🚀 Skibidi Wallet Backend (TESTNET) running on all interfaces at port 8080");
     println!("🌐 Local access: http://192.168.1.5:8080");
     println!("📱 Mobile access: http://[YOUR_IP]:8080 (replace [YOUR_IP] with your machine's IP)");
     println!("💰 Network: Bitcoin Testnet");
+    println!("⚡ Lightning Network: ENABLED for instant micro payments!");
     println!("🔄 Multiple blockchain backends configured:");
     for backend in BLOCKCHAIN_BACKENDS {
         println!("   • {} - {}", backend.name, backend.url);
     }
     println!("⚡ Automatic failover enabled for maximum reliability!");
-    println!("🎮 Ready for real Bitcoin testing!");
+    println!("🎮 Ready for real Bitcoin + Lightning testing!");
     
     HttpServer::new(move || {
         App::new()
             .app_data(wallet_storage.clone())
+            .app_data(lightning_storage.clone())
             .service(health_check)
             .service(backend_status)
             .service(create_wallet)
@@ -573,6 +772,12 @@ async fn main() -> std::io::Result<()> {
             .service(get_transactions)
             .service(get_address)
             .service(send_bitcoin)
+            // Lightning endpoints
+            .service(create_lightning_invoice)
+            .service(pay_lightning_invoice)
+            .service(pay_lnurl)
+            .service(get_lightning_payments)
+            .service(get_lightning_invoices)
     })
     .bind("0.0.0.0:8080")?
     .run()

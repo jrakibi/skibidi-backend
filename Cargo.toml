@@ -1,7 +1,7 @@
 [package]
 name = "skibidi-wallet-backend"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 # Enable blocking Esplora backend and BIP39 keys support; disable default features to avoid pulling in Electrum.
@@ -12,3 +12,23 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.0", features = ["v4"] }
+
+# Lightning Network Dependencies - match Bitcoin versions used by Lightning
+lightning = "0.0.118"
+lightning-net-tokio = "0.0.118"
+lightning-persister = "0.0.118"
+lightning-background-processor = "0.0.118"
+lightning-rapid-gossip-sync = "0.0.118"
+lightning-invoice = "0.26"
+
+# Additional crypto dependencies - use versions compatible with Lightning
+bitcoin = "0.29"
+secp256k1 = { version = "0.24", features = ["global-context"] }
+rand = "0.8"
+hex = "0.4"
+
+# HTTP client for LNURL
+reqwest = { version = "0.11", features = ["json"] }
+
+# Base64 encoding for Lightning invoices
+base64 = "0.21"
