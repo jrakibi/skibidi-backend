@@ -1,0 +1,12 @@
+[build]
+# Railway will automatically detect Rust and build the project
+buildCommand = "cargo build --release"
+
+[deploy]
+# Use the release binary
+startCommand = "cargo run --release"
+
+[variables]
+# Environment variables for Railway
+RUST_LOG = "info"
+PORT = "8080" 
