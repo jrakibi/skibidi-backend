@@ -37,17 +37,17 @@ struct BlockchainBackend {
 const BLOCKCHAIN_BACKENDS: &[BlockchainBackend] = &[
     BlockchainBackend {
         name: "Mempool.space",
-        url: "https://mempool.space/testnet/api",
+        url: "https://mempool.space/api",
         timeout: 20,
     },
     BlockchainBackend {
         name: "Blockstream",
-        url: "https://blockstream.info/testnet/api",
+        url: "https://blockstream.info/api",
         timeout: 20,
     },
     BlockchainBackend {
         name: "Bitcoin Explorer",
-        url: "https://bitcoin-testnet.explorer.com/api",
+        url: "https://bitcoin.explorer.com/api",
         timeout: 15,
     },
 ];
@@ -125,7 +125,7 @@ fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatab
     let xkey: ExtendedKey = (mnemonic, None).into_extended_key()
         .map_err(|e| format!("Failed to create extended key: {}", e))?;
     
-    let xprv = match xkey.into_xprv(Network::Testnet) {
+    let xprv = match xkey.into_xprv(Network::Bitcoin) {
         Some(key) => key,
         None => return Err("Failed to create private key".to_string()),
     };
@@ -138,7 +138,7 @@ fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatab
     let wallet = Wallet::new(
         &descriptor,
         None,
-        Network::Testnet,
+        Network::Bitcoin,
         MemoryDatabase::default(),
     ).map_err(|e| format!("Failed to create wallet: {}", e))?;
 
@@ -179,7 +179,7 @@ where
 }
 
 fn sync_wallet(wallet: &Wallet<MemoryDatabase>) -> Result<String, String> {
-    println!("🔄 Syncing wallet with blockchain backends (testnet)...");
+    println!("🔄 Syncing wallet with blockchain backends (mainnet)...");
 
     let (_, backend_name) = try_blockchain_backends("wallet sync", |blockchain| {
         wallet.sync(blockchain, SyncOptions::default())
@@ -423,7 +423,7 @@ async fn send_bitcoin(request: web::Json<SendBitcoinRequest>) -> ActixResult<Htt
 
     // Parse recipient address
     let recipient = match Address::from_str(&request.to_address) {
-        Ok(addr) => match addr.require_network(Network::Testnet) {
+        Ok(addr) => match addr.require_network(Network::Bitcoin) {
             Ok(checked_addr) => checked_addr,
             Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
                 success: false,
@@ -539,7 +539,7 @@ async fn health_check() -> impl Responder {
 
     HttpResponse::Ok().json(serde_json::json!({
         "status": "🚀 Skibidi Wallet Backend is running! (Secure & Stateless)",
-        "network": "testnet",
+        "network": "mainnet",
         "security": "🔒 No sensitive data stored on server",
         "blockchain_backends": backends,
         "redundancy": "✅ Multiple backends with automatic failover",
@@ -702,7 +702,7 @@ async fn get_lightning_invoices(
 async fn main() -> std::io::Result<()> {
     println!("🚀 Starting Skibidi Wallet Backend (Secure & Stateless)");
     println!("🔒 No sensitive wallet data stored on server");
-    println!("🌐 Network: Testnet");
+    println!("🌐 Network: Mainnet");
     println!("⚡ Lightning Network: Enabled");
     
     // Initialize Lightning storage (only for Lightning-specific data)

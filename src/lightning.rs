@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const NETWORK: Network = Network::Testnet;
+pub const NETWORK: Network = Network::Bitcoin;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LightningInvoice {
@@ -65,7 +65,7 @@ impl Logger for SimpleLogger {
 pub struct SimpleFeeEstimator;
 impl FeeEstimator for SimpleFeeEstimator {
     fn get_est_sat_per_1000_weight(&self, _confirmation_target: ConfirmationTarget) -> u32 {
-        1000 // Simple fee rate for testnet
+        2000 // Simple fee rate for mainnet
     }
 }
 
@@ -139,7 +139,7 @@ impl LightningManager {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         // Generate a mock BOLT11 invoice string (in real implementation, use Lightning tools)
-        let bolt11 = format!("lntb{}1p{}", 
+        let bolt11 = format!("lnbc{}1p{}", 
             amount_msats.map_or("".to_string(), |amt| format!("{}m", amt / 1000)),
             hex::encode(&payment_hash.0[..8])
         );
@@ -163,7 +163,7 @@ impl LightningManager {
 
     pub async fn pay_invoice(&self, bolt11: String) -> Result<LightningPayment, String> {
         // Parse basic invoice info (simplified)
-        if !bolt11.starts_with("lntb") {
+        if !bolt11.starts_with("lnbc") {
             return Err("Invalid BOLT11 invoice format".to_string());
         }
 
