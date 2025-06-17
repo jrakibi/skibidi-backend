@@ -1,1 +1,42 @@
-/target
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# Database and storage files
+wallet_storage.sled/
+*.sled/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.staging
+
+# IDE and editor files
+.vscode/
+.idea/
+*.iml
+.DS_Store
+
+# Expo (if accidentally created)
+.expo/
+expo-env.d.ts
+
+# Node modules (if any JS tooling is added)
+node_modules/
+
+# Production secrets
+secrets/
+private_keys/
+*.key
+*.pem

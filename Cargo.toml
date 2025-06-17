@@ -3,6 +3,13 @@ name = "skibidi-wallet-backend"
 version = "0.1.0"
 edition = "2021"
 
+# Production optimization settings
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = 'abort'
+
 [dependencies]
 # Enable blocking Esplora backend and BIP39 keys support; disable default features to avoid pulling in Electrum.
 bdk = { version = "0.29", default-features = false, features = ["std", "keys-bip39", "use-esplora-blocking"] }
