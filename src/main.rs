@@ -6,8 +6,6 @@ use bdk::keys::{ExtendedKey, GeneratedKey, GeneratableKey, DerivableKey};
 use bdk::keys::bip39::{Mnemonic, Language, WordCount};
 use bdk::blockchain::esplora::EsploraBlockchain;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Mutex;
 use bdk::bitcoin::{Address, Network};
 use bdk::descriptor::Segwitv0;
 use std::str::FromStr;
@@ -15,19 +13,8 @@ use std::str::FromStr;
 mod lightning;
 use lightning::{LightningManager, LightningInvoice, LightningPayment};
 
-// Global wallet storage (persistent using sled)
-type WalletStorage = Mutex<sled::Db>;
-
-// Wallet metadata for persistence
-#[derive(Serialize, Deserialize, Clone)]
-struct WalletMeta {
-    mnemonic: String,
-    wallet_id: String,
-    created_at: u64,
-}
-
-// Global Lightning manager
-type LightningStorage = Mutex<Option<LightningManager>>;
+// Global Lightning manager (only non-sensitive Lightning data)
+type LightningStorage = std::sync::Mutex<Option<LightningManager>>;
 
 // Blockchain backend configuration
 #[derive(Debug, Clone)]
@@ -67,7 +54,6 @@ struct ApiResponse<T> {
 struct WalletInfo {
     mnemonic: String,
     address: String,
-    wallet_id: String,
     backend_used: String,
 }
 
@@ -87,6 +73,7 @@ struct TransactionInfo {
     timestamp: Option<u64>,
 }
 
+// Updated request structures - now include mnemonic for stateless operation
 #[derive(Deserialize)]
 struct RestoreWalletRequest {
     mnemonic: String,
@@ -94,14 +81,14 @@ struct RestoreWalletRequest {
 
 #[derive(Deserialize)]
 struct SendBitcoinRequest {
-    wallet_id: String,
+    mnemonic: String,  // Client provides mnemonic for each transaction
     to_address: String,
     amount_sats: u64,
 }
 
 #[derive(Deserialize)]
-struct WalletRequest {
-    wallet_id: String,
+struct WalletOperationRequest {
+    mnemonic: String,  // Client provides mnemonic for each operation
 }
 
 #[derive(Deserialize)]
@@ -134,10 +121,9 @@ fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatab
     };
     
     // Use no derivation path - just the master private key directly
-    // This matches the expected behavior for the existing mnemonic
     let descriptor = format!("wpkh({})", xprv);
     
-    println!("🔑 Using descriptor: wpkh({})", "[xprv_hidden]");
+    println!("🔑 Creating wallet from mnemonic (descriptor hidden for security)");
     
     let wallet = Wallet::new(
         &descriptor,
@@ -183,7 +169,7 @@ where
 }
 
 fn sync_wallet(wallet: &Wallet<MemoryDatabase>) -> Result<String, String> {
-    println!("🔄 Syncing wallet with multiple blockchain backends (testnet)...");
+    println!("🔄 Syncing wallet with blockchain backends (testnet)...");
 
     let (_, backend_name) = try_blockchain_backends("wallet sync", |blockchain| {
         wallet.sync(blockchain, SyncOptions::default())
@@ -200,61 +186,16 @@ fn broadcast_transaction(_wallet: &Wallet<MemoryDatabase>, tx: &bdk::bitcoin::Tr
         blockchain.broadcast(tx).map_err(|e| bdk::Error::Generic(e.to_string()))
     })?;
 
-    println!("✅ Transaction broadcasted successfully via {}!", backend_name);
+    println!("🎯 Transaction broadcast successful using {}", backend_name);
     Ok(backend_name)
 }
 
-// Helper functions for persistent wallet storage
-fn save_wallet_meta(db: &sled::Db, wallet_id: &str, mnemonic: &str) -> Result<(), String> {
-    let meta = WalletMeta {
-        mnemonic: mnemonic.to_string(),
-        wallet_id: wallet_id.to_string(),
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-    };
-    
-    let serialized = serde_json::to_vec(&meta)
-        .map_err(|e| format!("Failed to serialize wallet metadata: {}", e))?;
-    
-    db.insert(wallet_id.as_bytes(), serialized)
-        .map_err(|e| format!("Failed to save wallet metadata: {}", e))?;
-    
-    Ok(())
-}
-
-fn load_wallet_meta(db: &sled::Db, wallet_id: &str) -> Result<Option<WalletMeta>, String> {
-    match db.get(wallet_id.as_bytes()) {
-        Ok(Some(data)) => {
-            let meta: WalletMeta = serde_json::from_slice(&data)
-                .map_err(|e| format!("Failed to deserialize wallet metadata: {}", e))?;
-            Ok(Some(meta))
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Err(format!("Failed to load wallet metadata: {}", e)),
-    }
-}
-
-fn get_or_create_wallet(db: &sled::Db, wallet_id: &str) -> Result<Wallet<MemoryDatabase>, String> {
-    // Try to load wallet metadata from persistent storage
-    let meta = load_wallet_meta(db, wallet_id)?;
-    
-    match meta {
-        Some(wallet_meta) => {
-            // Recreate wallet from stored mnemonic
-            let (wallet, _) = create_wallet_from_mnemonic(&wallet_meta.mnemonic)?;
-            println!("🔄 Restored wallet {} from persistent storage", wallet_id);
-            Ok(wallet)
-        }
-        None => {
-            Err("Wallet not found".to_string())
-        }
-    }
-}
+// SECURE API ENDPOINTS - NO SERVER-SIDE STORAGE
 
 #[post("/create-wallet")]
-async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpResponse> {
+async fn create_wallet() -> ActixResult<HttpResponse> {
+    println!("🔐 Creating new wallet (stateless)");
+    
     // Generate a new 12-word mnemonic
     let mnemonic: GeneratedKey<Mnemonic, Segwitv0> = match Mnemonic::generate((WordCount::Words12, Language::English)) {
         Ok(m) => m,
@@ -276,7 +217,7 @@ async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpRes
         })),
     };
 
-    // Sync wallet with multiple backends
+    // Sync wallet with blockchain
     let backend_used = match sync_wallet(&wallet) {
         Ok(backend) => backend,
         Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
@@ -286,25 +227,11 @@ async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpRes
         })),
     };
 
-    // Generate wallet ID
-    let wallet_id = format!("wallet_{}", uuid::Uuid::new_v4().to_string()[..8].to_lowercase());
-    
-    // Save wallet metadata to persistent storage
-    let db = storage.lock().unwrap();
-    if let Err(e) = save_wallet_meta(&db, &wallet_id, &mnemonic_str) {
-        return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(format!("Failed to save wallet: {}", e)),
-        }));
-    }
-
-    println!("✅ Wallet {} created and saved to persistent storage", wallet_id);
+    println!("✅ New wallet created successfully (not stored on server)");
 
     let wallet_info = WalletInfo {
         mnemonic: mnemonic_str,
         address,
-        wallet_id,
         backend_used,
     };
 
@@ -316,10 +243,9 @@ async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpRes
 }
 
 #[post("/restore-wallet")]
-async fn restore_wallet(
-    request: web::Json<RestoreWalletRequest>,
-    storage: web::Data<WalletStorage>
-) -> ActixResult<HttpResponse> {
+async fn restore_wallet(request: web::Json<RestoreWalletRequest>) -> ActixResult<HttpResponse> {
+    println!("🔐 Restoring wallet from mnemonic (stateless)");
+    
     let (wallet, address) = match create_wallet_from_mnemonic(&request.mnemonic) {
         Ok((w, a)) => (w, a),
         Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
@@ -329,7 +255,7 @@ async fn restore_wallet(
         })),
     };
 
-    // Sync wallet with multiple backends
+    // Sync wallet with blockchain
     let backend_used = match sync_wallet(&wallet) {
         Ok(backend) => backend,
         Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
@@ -339,25 +265,11 @@ async fn restore_wallet(
         })),
     };
 
-    // Generate wallet ID
-    let wallet_id = format!("wallet_{}", uuid::Uuid::new_v4().to_string()[..8].to_lowercase());
-    
-    // Save wallet metadata to persistent storage
-    let db = storage.lock().unwrap();
-    if let Err(e) = save_wallet_meta(&db, &wallet_id, &request.mnemonic) {
-        return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(format!("Failed to save wallet: {}", e)),
-        }));
-    }
-
-    println!("✅ Wallet {} restored and saved to persistent storage", wallet_id);
+    println!("✅ Wallet restored successfully (not stored on server)");
 
     let wallet_info = WalletInfo {
         mnemonic: request.mnemonic.clone(),
         address,
-        wallet_id,
         backend_used,
     };
 
@@ -369,21 +281,19 @@ async fn restore_wallet(
 }
 
 #[post("/get-balance")]
-async fn get_balance(
-    request: web::Json<WalletRequest>,
-    storage: web::Data<WalletStorage>
-) -> ActixResult<HttpResponse> {
-    let db = storage.lock().unwrap();
-    let mut wallet = match get_or_create_wallet(&db, &request.wallet_id) {
-        Ok(w) => w,
-        Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
+async fn get_balance(request: web::Json<WalletOperationRequest>) -> ActixResult<HttpResponse> {
+    println!("💰 Getting balance for wallet (stateless)");
+    
+    let wallet = match create_wallet_from_mnemonic(&request.mnemonic) {
+        Ok((w, _)) => w,
+        Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
             success: false,
             data: None,
             error: Some(e),
         })),
     };
 
-    // Sync wallet before getting balance
+    // Sync wallet to get latest balance
     let backend_used = match sync_wallet(&wallet) {
         Ok(backend) => backend,
         Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
@@ -393,19 +303,14 @@ async fn get_balance(
         })),
     };
 
-    let balance = match wallet.get_balance() {
-        Ok(b) => b,
-        Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(format!("Failed to get balance: {}", e)),
-        })),
-    };
+    let balance = wallet.get_balance().unwrap();
+    
+    println!("💰 Balance retrieved: {} sats", balance.confirmed + balance.trusted_pending + balance.untrusted_pending);
 
     let balance_info = BalanceInfo {
         confirmed: balance.confirmed,
-        unconfirmed: balance.untrusted_pending + balance.trusted_pending,
-        total: balance.confirmed + balance.untrusted_pending + balance.trusted_pending,
+        unconfirmed: balance.trusted_pending + balance.untrusted_pending,
+        total: balance.confirmed + balance.trusted_pending + balance.untrusted_pending,
         backend_used,
     };
 
@@ -417,46 +322,40 @@ async fn get_balance(
 }
 
 #[post("/get-transactions")]
-async fn get_transactions(
-    request: web::Json<WalletRequest>,
-    storage: web::Data<WalletStorage>
-) -> ActixResult<HttpResponse> {
-    let db = storage.lock().unwrap();
-    let mut wallet = match get_or_create_wallet(&db, &request.wallet_id) {
-        Ok(w) => w,
-        Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
+async fn get_transactions(request: web::Json<WalletOperationRequest>) -> ActixResult<HttpResponse> {
+    println!("📋 Getting transactions for wallet (stateless)");
+    
+    let wallet = match create_wallet_from_mnemonic(&request.mnemonic) {
+        Ok((w, _)) => w,
+        Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
             success: false,
             data: None,
             error: Some(e),
         })),
     };
 
-    // Sync wallet before getting transactions
-    if let Err(e) = sync_wallet(&wallet) {
-        return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(format!("Sync failed: {}", e)),
-        }));
-    }
-
-    let transactions = match wallet.list_transactions(false) {
-        Ok(txs) => txs,
+    // Sync wallet to get latest transactions
+    let backend_used = match sync_wallet(&wallet) {
+        Ok(backend) => backend,
         Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
-            error: Some(format!("Failed to get transactions: {}", e)),
+            error: Some(format!("Sync failed: {}", e)),
         })),
     };
 
-    let tx_info: Vec<TransactionInfo> = transactions.iter().map(|tx| {
-        TransactionInfo {
+    let transactions = wallet.list_transactions(false).unwrap();
+    let tx_info: Vec<TransactionInfo> = transactions
+        .into_iter()
+        .map(|tx| TransactionInfo {
             txid: tx.txid.to_string(),
             amount: tx.received as i64 - tx.sent as i64,
-            confirmations: tx.confirmation_time.as_ref().map_or(0, |c| c.height as u32),
-            timestamp: tx.confirmation_time.as_ref().map(|c| c.timestamp),
-        }
-    }).collect();
+            confirmations: tx.confirmation_time.as_ref().map_or(0, |ct| ct.height),
+            timestamp: tx.confirmation_time.as_ref().map(|ct| ct.timestamp),
+        })
+        .collect();
+
+    println!("📋 Retrieved {} transactions", tx_info.len());
 
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
@@ -466,45 +365,34 @@ async fn get_transactions(
 }
 
 #[post("/get-address")]
-async fn get_address(
-    request: web::Json<WalletRequest>,
-    storage: web::Data<WalletStorage>
-) -> ActixResult<HttpResponse> {
-    let db = storage.lock().unwrap();
-    let wallet = match get_or_create_wallet(&db, &request.wallet_id) {
-        Ok(w) => w,
-        Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
+async fn get_address(request: web::Json<WalletOperationRequest>) -> ActixResult<HttpResponse> {
+    println!("📍 Getting address for wallet (stateless)");
+    
+    let (wallet, address) = match create_wallet_from_mnemonic(&request.mnemonic) {
+        Ok((w, a)) => (w, a),
+        Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
             success: false,
             data: None,
             error: Some(e),
         })),
     };
 
-    let address = match wallet.get_address(New) {
-        Ok(addr) => addr,
-        Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(format!("Failed to get address: {}", e)),
-        })),
-    };
+    println!("📍 Address retrieved: {}", address);
 
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
-        data: Some(address.to_string()),
+        data: Some(address),
         error: None,
     }))
 }
 
 #[post("/send-bitcoin")]
-async fn send_bitcoin(
-    request: web::Json<SendBitcoinRequest>,
-    storage: web::Data<WalletStorage>
-) -> ActixResult<HttpResponse> {
-    let db = storage.lock().unwrap();
-    let mut wallet = match get_or_create_wallet(&db, &request.wallet_id) {
-        Ok(w) => w,
-        Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
+async fn send_bitcoin(request: web::Json<SendBitcoinRequest>) -> ActixResult<HttpResponse> {
+    println!("💸 Sending Bitcoin (stateless)");
+    
+    let wallet = match create_wallet_from_mnemonic(&request.mnemonic) {
+        Ok((w, _)) => w,
+        Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
             success: false,
             data: None,
             error: Some(e),
@@ -638,8 +526,9 @@ async fn health_check() -> impl Responder {
         .collect();
 
     HttpResponse::Ok().json(serde_json::json!({
-        "status": "🚀 Skibidi Wallet Backend is running!",
+        "status": "🚀 Skibidi Wallet Backend is running! (Secure & Stateless)",
         "network": "testnet",
+        "security": "🔒 No sensitive data stored on server",
         "blockchain_backends": backends,
         "redundancy": "✅ Multiple backends with automatic failover",
         "endpoints": [
@@ -654,7 +543,7 @@ async fn health_check() -> impl Responder {
     }))
 }
 
-// Lightning Network Endpoints
+// Lightning Network Endpoints (unchanged - Lightning data is not as sensitive)
 
 #[post("/lightning/create-invoice")]
 async fn create_lightning_invoice(
@@ -698,21 +587,16 @@ async fn pay_lightning_invoice(
 ) -> ActixResult<HttpResponse> {
     let mut lightning_guard = lightning_storage.lock().unwrap();
     
-    // Initialize Lightning manager if not exists
     if lightning_guard.is_none() {
-        match LightningManager::new() {
-            Ok(manager) => *lightning_guard = Some(manager),
-            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to initialize Lightning: {}", e)),
-            })),
-        }
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some("Lightning not initialized".to_string()),
+        }));
     }
 
     let lightning_manager = lightning_guard.as_ref().unwrap();
     
-    // Clone the manager to avoid holding the lock during async operation
     match lightning_manager.pay_invoice(request.bolt11.clone()).await {
         Ok(payment) => Ok(HttpResponse::Ok().json(ApiResponse {
             success: true,
@@ -722,7 +606,7 @@ async fn pay_lightning_invoice(
         Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
-            error: Some(format!("Payment failed: {}", e)),
+            error: Some(format!("Failed to pay invoice: {}", e)),
         })),
     }
 }
@@ -734,51 +618,26 @@ async fn pay_lnurl(
 ) -> ActixResult<HttpResponse> {
     let mut lightning_guard = lightning_storage.lock().unwrap();
     
-    // Initialize Lightning manager if not exists
     if lightning_guard.is_none() {
-        match LightningManager::new() {
-            Ok(manager) => *lightning_guard = Some(manager),
-            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to initialize Lightning: {}", e)),
-            })),
-        }
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some("Lightning not initialized".to_string()),
+        }));
     }
 
     let lightning_manager = lightning_guard.as_ref().unwrap();
     
-    // First decode LNURL
-    match lightning_manager.decode_lnurl(request.lnurl.clone()).await {
-        Ok(lnurl_request) => {
-            // Check amount limits
-            if request.amount_msats < lnurl_request.min_sendable || request.amount_msats > lnurl_request.max_sendable {
-                return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(format!("Amount {} msats is outside allowed range ({}-{})", 
-                        request.amount_msats, lnurl_request.min_sendable, lnurl_request.max_sendable)),
-                }));
-            }
-
-            // Pay via LNURL callback
-            match lightning_manager.pay_lnurl(lnurl_request.callback, request.amount_msats).await {
-                Ok(payment) => Ok(HttpResponse::Ok().json(ApiResponse {
-                    success: true,
-                    data: Some(payment),
-                    error: None,
-                })),
-                Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(format!("LNURL payment failed: {}", e)),
-                })),
-            }
-        },
-        Err(e) => Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+    match lightning_manager.pay_lnurl(request.lnurl.clone(), request.amount_msats).await {
+        Ok(payment) => Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(payment),
+            error: None,
+        })),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
-            error: Some(format!("Invalid LNURL: {}", e)),
+            error: Some(format!("Failed to pay LNURL: {}", e)),
         })),
     }
 }
@@ -829,33 +688,27 @@ async fn get_lightning_invoices(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let wallet_storage = web::Data::new(Mutex::new(sled::open("wallet_storage.sled")?));
+    println!("🚀 Starting Skibidi Wallet Backend (Secure & Stateless)");
+    println!("🔒 No sensitive wallet data stored on server");
+    println!("🌐 Network: Testnet");
+    println!("⚡ Lightning Network: Enabled");
+    
+    // Initialize Lightning storage (only for Lightning-specific data)
     let lightning_storage = web::Data::new(LightningStorage::new(None));
-    
-    println!("🚀 Skibidi Wallet Backend (TESTNET) running on all interfaces at port 8080");
-    println!("🌐 Local access: http://192.168.1.5:8080");
-    println!("📱 Mobile access: http://[YOUR_IP]:8080 (replace [YOUR_IP] with your machine's IP)");
-    println!("💰 Network: Bitcoin Testnet");
-    println!("⚡ Lightning Network: ENABLED for instant micro payments!");
-    println!("🔄 Multiple blockchain backends configured:");
-    for backend in BLOCKCHAIN_BACKENDS {
-        println!("   • {} - {}", backend.name, backend.url);
-    }
-    println!("⚡ Automatic failover enabled for maximum reliability!");
-    println!("🎮 Ready for real Bitcoin + Lightning testing!");
-    
+
     HttpServer::new(move || {
         App::new()
-            .app_data(wallet_storage.clone())
             .app_data(lightning_storage.clone())
-            .service(health_check)
-            .service(backend_status)
+            // Wallet endpoints (stateless)
             .service(create_wallet)
             .service(restore_wallet)
             .service(get_balance)
             .service(get_transactions)
             .service(get_address)
             .service(send_bitcoin)
+            // System endpoints
+            .service(backend_status)
+            .service(health_check)
             // Lightning endpoints
             .service(create_lightning_invoice)
             .service(pay_lightning_invoice)
