@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use bdk::bitcoin::{Address, Network};
 use bdk::descriptor::Segwitv0;
 use std::str::FromStr;
+use sha2::{Sha256, Digest};
 
 mod lightning;
 use lightning::{LightningManager, LightningInvoice, LightningPayment};
@@ -253,6 +254,20 @@ fn get_or_create_wallet(db: &sled::Db, wallet_id: &str) -> Result<Wallet<MemoryD
     }
 }
 
+// Add function to generate deterministic wallet ID from mnemonic
+fn generate_wallet_id_from_mnemonic(mnemonic: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(mnemonic.as_bytes());
+    let hash = hasher.finalize();
+    format!("wallet_{}", hex::encode(&hash[..4]))
+}
+
+// Add function to check if wallet exists by mnemonic
+fn find_wallet_by_mnemonic(db: &sled::Db, mnemonic: &str) -> Result<Option<WalletMeta>, String> {
+    let target_id = generate_wallet_id_from_mnemonic(mnemonic);
+    load_wallet_meta(db, &target_id)
+}
+
 #[post("/create-wallet")]
 async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpResponse> {
     // Generate a new 12-word mnemonic
@@ -266,6 +281,47 @@ async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpRes
     };
 
     let mnemonic_str = mnemonic.to_string();
+    
+    // Generate deterministic wallet ID
+    let wallet_id = generate_wallet_id_from_mnemonic(&mnemonic_str);
+    
+    // Check if wallet already exists
+    let db = storage.lock().unwrap();
+    if let Ok(Some(existing_meta)) = find_wallet_by_mnemonic(&db, &mnemonic_str) {
+        println!("🔄 Returning existing wallet {} instead of creating duplicate", wallet_id);
+        
+        let (wallet, address) = match create_wallet_from_mnemonic(&mnemonic_str) {
+            Ok((w, a)) => (w, a),
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(e),
+            })),
+        };
+
+        // Sync wallet with multiple backends
+        let backend_used = match sync_wallet(&wallet) {
+            Ok(backend) => backend,
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(e),
+            })),
+        };
+
+        let wallet_info = WalletInfo {
+            mnemonic: mnemonic_str,
+            address,
+            wallet_id,
+            backend_used,
+        };
+
+        return Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(wallet_info),
+            error: None,
+        }));
+    }
     
     let (wallet, address) = match create_wallet_from_mnemonic(&mnemonic_str) {
         Ok((w, a)) => (w, a),
@@ -285,12 +341,8 @@ async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpRes
             error: Some(e),
         })),
     };
-
-    // Generate wallet ID
-    let wallet_id = format!("wallet_{}", uuid::Uuid::new_v4().to_string()[..8].to_lowercase());
     
     // Save wallet metadata to persistent storage
-    let db = storage.lock().unwrap();
     if let Err(e) = save_wallet_meta(&db, &wallet_id, &mnemonic_str) {
         return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
@@ -320,6 +372,47 @@ async fn restore_wallet(
     request: web::Json<RestoreWalletRequest>,
     storage: web::Data<WalletStorage>
 ) -> ActixResult<HttpResponse> {
+    // Generate deterministic wallet ID
+    let wallet_id = generate_wallet_id_from_mnemonic(&request.mnemonic);
+    
+    // Check if wallet already exists
+    let db = storage.lock().unwrap();
+    if let Ok(Some(existing_meta)) = find_wallet_by_mnemonic(&db, &request.mnemonic) {
+        println!("🔄 Returning existing wallet {} instead of creating duplicate", wallet_id);
+        
+        let (wallet, address) = match create_wallet_from_mnemonic(&request.mnemonic) {
+            Ok((w, a)) => (w, a),
+            Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(e),
+            })),
+        };
+
+        // Sync wallet with multiple backends
+        let backend_used = match sync_wallet(&wallet) {
+            Ok(backend) => backend,
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(e),
+            })),
+        };
+
+        let wallet_info = WalletInfo {
+            mnemonic: request.mnemonic.clone(),
+            address,
+            wallet_id,
+            backend_used,
+        };
+
+        return Ok(HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            data: Some(wallet_info),
+            error: None,
+        }));
+    }
+
     let (wallet, address) = match create_wallet_from_mnemonic(&request.mnemonic) {
         Ok((w, a)) => (w, a),
         Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
@@ -338,12 +431,8 @@ async fn restore_wallet(
             error: Some(e),
         })),
     };
-
-    // Generate wallet ID
-    let wallet_id = format!("wallet_{}", uuid::Uuid::new_v4().to_string()[..8].to_lowercase());
     
     // Save wallet metadata to persistent storage
-    let db = storage.lock().unwrap();
     if let Err(e) = save_wallet_meta(&db, &wallet_id, &request.mnemonic) {
         return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
