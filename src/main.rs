@@ -9,6 +9,15 @@ use serde::{Deserialize, Serialize};
 use bdk::bitcoin::{Address, Network};
 use bdk::descriptor::Segwitv0;
 use std::str::FromStr;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+// Function to generate consistent wallet ID from mnemonic
+fn generate_wallet_id(mnemonic: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    mnemonic.hash(&mut hasher);
+    format!("wallet_{:x}", hasher.finish())
+}
 
 mod lightning;
 use lightning::{LightningManager, LightningInvoice, LightningPayment};
@@ -52,6 +61,7 @@ struct ApiResponse<T> {
 
 #[derive(Serialize)]
 struct WalletInfo {
+    wallet_id: String,
     mnemonic: String,
     address: String,
     backend_used: String,
@@ -230,6 +240,7 @@ async fn create_wallet() -> ActixResult<HttpResponse> {
     println!("✅ New wallet created successfully (not stored on server)");
 
     let wallet_info = WalletInfo {
+        wallet_id: generate_wallet_id(&mnemonic_str),
         mnemonic: mnemonic_str,
         address,
         backend_used,
@@ -268,6 +279,7 @@ async fn restore_wallet(request: web::Json<RestoreWalletRequest>) -> ActixResult
     println!("✅ Wallet restored successfully (not stored on server)");
 
     let wallet_info = WalletInfo {
+        wallet_id: generate_wallet_id(&request.mnemonic),
         mnemonic: request.mnemonic.clone(),
         address,
         backend_used,
