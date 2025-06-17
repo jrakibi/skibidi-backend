@@ -1,14 +1,16 @@
 use actix_web::{post, get, web, App, HttpServer, Responder, Result as ActixResult, HttpResponse};
 use bdk::database::MemoryDatabase;
 use bdk::wallet::AddressIndex::New;
-use bdk::{Wallet, SyncOptions};
+use bdk::{Wallet, FeeRate, SignOptions, SyncOptions};
 use bdk::keys::{ExtendedKey, GeneratedKey, GeneratableKey, DerivableKey};
 use bdk::keys::bip39::{Mnemonic, Language, WordCount};
 use bdk::blockchain::esplora::EsploraBlockchain;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Mutex;
-use bdk::bitcoin::Network;
+use bdk::bitcoin::{Address, Network};
 use bdk::descriptor::Segwitv0;
+use std::str::FromStr;
 
 mod lightning;
 use lightning::{LightningManager, LightningInvoice, LightningPayment};
@@ -16,10 +18,10 @@ use lightning::{LightningManager, LightningInvoice, LightningPayment};
 // Global wallet storage (persistent using sled)
 type WalletStorage = Mutex<sled::Db>;
 
-// Wallet metadata for persistence - NO PRIVATE DATA STORED!
+// Wallet metadata for persistence
 #[derive(Serialize, Deserialize, Clone)]
 struct WalletMeta {
-    address: String,        // Only public address
+    mnemonic: String,
     wallet_id: String,
     created_at: u64,
 }
@@ -63,10 +65,10 @@ struct ApiResponse<T> {
 
 #[derive(Serialize)]
 struct WalletInfo {
-    address: String,        
+    mnemonic: String,
+    address: String,
     wallet_id: String,
     backend_used: String,
-    mnemonic: String,       // Temporarily return to client, but NOT stored on server
 }
 
 #[derive(Serialize)]
@@ -202,10 +204,10 @@ fn broadcast_transaction(_wallet: &Wallet<MemoryDatabase>, tx: &bdk::bitcoin::Tr
     Ok(backend_name)
 }
 
-// Helper functions for persistent wallet storage - SECURE VERSION
-fn save_wallet_meta(db: &sled::Db, wallet_id: &str, address: &str) -> Result<(), String> {
+// Helper functions for persistent wallet storage
+fn save_wallet_meta(db: &sled::Db, wallet_id: &str, mnemonic: &str) -> Result<(), String> {
     let meta = WalletMeta {
-        address: address.to_string(),  // Only store public address
+        mnemonic: mnemonic.to_string(),
         wallet_id: wallet_id.to_string(),
         created_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -234,14 +236,16 @@ fn load_wallet_meta(db: &sled::Db, wallet_id: &str) -> Result<Option<WalletMeta>
     }
 }
 
-// New secure approach - only get wallet address for balance/transaction lookups
-fn get_wallet_address(db: &sled::Db, wallet_id: &str) -> Result<String, String> {
+fn get_or_create_wallet(db: &sled::Db, wallet_id: &str) -> Result<Wallet<MemoryDatabase>, String> {
+    // Try to load wallet metadata from persistent storage
     let meta = load_wallet_meta(db, wallet_id)?;
     
     match meta {
         Some(wallet_meta) => {
-            println!("📂 Found wallet address for: {}", wallet_id);
-            Ok(wallet_meta.address)
+            // Recreate wallet from stored mnemonic
+            let (wallet, _) = create_wallet_from_mnemonic(&wallet_meta.mnemonic)?;
+            println!("🔄 Restored wallet {} from persistent storage", wallet_id);
+            Ok(wallet)
         }
         None => {
             Err("Wallet not found".to_string())
@@ -285,9 +289,9 @@ async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpRes
     // Generate wallet ID
     let wallet_id = format!("wallet_{}", uuid::Uuid::new_v4().to_string()[..8].to_lowercase());
     
-    // Save wallet metadata to persistent storage - ONLY PUBLIC DATA
+    // Save wallet metadata to persistent storage
     let db = storage.lock().unwrap();
-    if let Err(e) = save_wallet_meta(&db, &wallet_id, &address) {
+    if let Err(e) = save_wallet_meta(&db, &wallet_id, &mnemonic_str) {
         return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
@@ -295,14 +299,13 @@ async fn create_wallet(storage: web::Data<WalletStorage>) -> ActixResult<HttpRes
         }));
     }
 
-    println!("✅ Wallet {} created and saved to persistent storage (SECURE)", wallet_id);
+    println!("✅ Wallet {} created and saved to persistent storage", wallet_id);
 
     let wallet_info = WalletInfo {
+        mnemonic: mnemonic_str,
         address,
         wallet_id,
         backend_used,
-        // mnemonic sent separately to client only
-        mnemonic: mnemonic_str,  // TODO: Remove this, send separately
     };
 
     Ok(HttpResponse::Ok().json(ApiResponse {
@@ -339,9 +342,9 @@ async fn restore_wallet(
     // Generate wallet ID
     let wallet_id = format!("wallet_{}", uuid::Uuid::new_v4().to_string()[..8].to_lowercase());
     
-    // Save wallet metadata to persistent storage - ONLY PUBLIC DATA
+    // Save wallet metadata to persistent storage
     let db = storage.lock().unwrap();
-    if let Err(e) = save_wallet_meta(&db, &wallet_id, &address) {
+    if let Err(e) = save_wallet_meta(&db, &wallet_id, &request.mnemonic) {
         return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
@@ -349,10 +352,10 @@ async fn restore_wallet(
         }));
     }
 
-    println!("✅ Wallet {} restored and saved to persistent storage (SECURE)", wallet_id);
+    println!("✅ Wallet {} restored and saved to persistent storage", wallet_id);
 
     let wallet_info = WalletInfo {
-        mnemonic: request.mnemonic.clone(),  // Return to client but not stored
+        mnemonic: request.mnemonic.clone(),
         address,
         wallet_id,
         backend_used,
@@ -371,8 +374,8 @@ async fn get_balance(
     storage: web::Data<WalletStorage>
 ) -> ActixResult<HttpResponse> {
     let db = storage.lock().unwrap();
-    let address = match get_wallet_address(&db, &request.wallet_id) {
-        Ok(addr) => addr,
+    let mut wallet = match get_or_create_wallet(&db, &request.wallet_id) {
+        Ok(w) => w,
         Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
             success: false,
             data: None,
@@ -380,27 +383,31 @@ async fn get_balance(
         })),
     };
 
-    // Query balance directly from blockchain using address
-    let (balance_result, backend_used) = match try_blockchain_backends("balance query", |blockchain| {
-        // For now, return zero balance - would need to implement address-based balance query
-        Ok((0u64, 0u64, 0u64)) // (confirmed, unconfirmed, total)
-    }) {
-        Ok((result, backend)) => (result, backend),
+    // Sync wallet before getting balance
+    let backend_used = match sync_wallet(&wallet) {
+        Ok(backend) => backend,
         Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
-            error: Some(format!("Balance query failed: {}", e)),
+            error: Some(format!("Sync failed: {}", e)),
+        })),
+    };
+
+    let balance = match wallet.get_balance() {
+        Ok(b) => b,
+        Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to get balance: {}", e)),
         })),
     };
 
     let balance_info = BalanceInfo {
-        confirmed: balance_result.0,
-        unconfirmed: balance_result.1,
-        total: balance_result.2,
+        confirmed: balance.confirmed,
+        unconfirmed: balance.untrusted_pending + balance.trusted_pending,
+        total: balance.confirmed + balance.untrusted_pending + balance.trusted_pending,
         backend_used,
     };
-
-    println!("💰 Balance query for address {}: {} sats", address, balance_info.total);
 
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
@@ -415,8 +422,8 @@ async fn get_transactions(
     storage: web::Data<WalletStorage>
 ) -> ActixResult<HttpResponse> {
     let db = storage.lock().unwrap();
-    let address = match get_wallet_address(&db, &request.wallet_id) {
-        Ok(addr) => addr,
+    let mut wallet = match get_or_create_wallet(&db, &request.wallet_id) {
+        Ok(w) => w,
         Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
             success: false,
             data: None,
@@ -424,25 +431,36 @@ async fn get_transactions(
         })),
     };
 
-    // Query transactions directly from blockchain using address
-    let (transactions, _backend_used) = match try_blockchain_backends("transaction query", |_blockchain| {
-        // For now, return empty transactions - would need to implement address-based transaction query
-        let empty_txs: Vec<TransactionInfo> = Vec::new();
-        Ok(empty_txs)
-    }) {
-        Ok((result, backend)) => (result, backend),
+    // Sync wallet before getting transactions
+    if let Err(e) = sync_wallet(&wallet) {
+        return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Sync failed: {}", e)),
+        }));
+    }
+
+    let transactions = match wallet.list_transactions(false) {
+        Ok(txs) => txs,
         Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
             success: false,
             data: None,
-            error: Some(format!("Transaction query failed: {}", e)),
+            error: Some(format!("Failed to get transactions: {}", e)),
         })),
     };
 
-    println!("📝 Transaction query for address {}: {} transactions", address, transactions.len());
+    let tx_info: Vec<TransactionInfo> = transactions.iter().map(|tx| {
+        TransactionInfo {
+            txid: tx.txid.to_string(),
+            amount: tx.received as i64 - tx.sent as i64,
+            confirmations: tx.confirmation_time.as_ref().map_or(0, |c| c.height as u32),
+            timestamp: tx.confirmation_time.as_ref().map(|c| c.timestamp),
+        }
+    }).collect();
 
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
-        data: Some(transactions),
+        data: Some(tx_info),
         error: None,
     }))
 }
@@ -453,8 +471,8 @@ async fn get_address(
     storage: web::Data<WalletStorage>
 ) -> ActixResult<HttpResponse> {
     let db = storage.lock().unwrap();
-    let address = match get_wallet_address(&db, &request.wallet_id) {
-        Ok(addr) => addr,
+    let wallet = match get_or_create_wallet(&db, &request.wallet_id) {
+        Ok(w) => w,
         Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
             success: false,
             data: None,
@@ -462,24 +480,122 @@ async fn get_address(
         })),
     };
 
+    let address = match wallet.get_address(New) {
+        Ok(addr) => addr,
+        Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to get address: {}", e)),
+        })),
+    };
+
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
-        data: Some(address),
+        data: Some(address.to_string()),
         error: None,
     }))
 }
 
 #[post("/send-bitcoin")]
 async fn send_bitcoin(
-    _request: web::Json<SendBitcoinRequest>,
-    _storage: web::Data<WalletStorage>
+    request: web::Json<SendBitcoinRequest>,
+    storage: web::Data<WalletStorage>
 ) -> ActixResult<HttpResponse> {
-    // SECURITY: Sending requires private keys - this must be done client-side
-    Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
-        success: false,
-        data: None,
-        error: Some("SECURITY: Transactions must be signed client-side. Server cannot access private keys.".to_string()),
-    }))
+    let db = storage.lock().unwrap();
+    let mut wallet = match get_or_create_wallet(&db, &request.wallet_id) {
+        Ok(w) => w,
+        Err(e) => return Ok(HttpResponse::NotFound().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(e),
+        })),
+    };
+
+    // Sync wallet before sending
+    let backend_used = match sync_wallet(&wallet) {
+        Ok(backend) => backend,
+        Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Sync failed: {}", e)),
+        })),
+    };
+
+    // Parse recipient address
+    let recipient = match Address::from_str(&request.to_address) {
+        Ok(addr) => match addr.require_network(Network::Testnet) {
+            Ok(checked_addr) => checked_addr,
+            Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Address network mismatch: {}", e)),
+            })),
+        },
+        Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Invalid address: {}", e)),
+        })),
+    };
+
+    // Create transaction builder
+    let mut tx_builder = wallet.build_tx();
+    tx_builder
+        .add_recipient(recipient.script_pubkey(), request.amount_sats)
+        .enable_rbf()
+        .fee_rate(FeeRate::from_sat_per_vb(1.0)); // 1 sat/vB fee rate
+
+    // Build transaction
+    let (mut psbt, tx_details) = match tx_builder.finish() {
+        Ok(result) => result,
+        Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to build transaction: {}", e)),
+        })),
+    };
+
+    // Sign transaction
+    let finalized = match wallet.sign(&mut psbt, SignOptions::default()) {
+        Ok(f) => f,
+        Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to sign transaction: {}", e)),
+        })),
+    };
+
+    if !finalized {
+        return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some("Transaction not fully signed".to_string()),
+        }));
+    }
+
+    // Extract signed transaction
+    let tx = psbt.extract_tx();
+
+    // Broadcast transaction
+    match broadcast_transaction(&wallet, &tx) {
+        Ok(backend_name) => {
+            println!("🎯 Transaction {} sent successfully via {}", tx.txid(), backend_name);
+            Ok(HttpResponse::Ok().json(ApiResponse {
+                success: true,
+                data: Some(serde_json::json!({
+                    "txid": tx.txid().to_string(),
+                    "fee": tx_details.fee.unwrap_or(0),
+                    "backend_used": backend_name
+                })),
+                error: None,
+            }))
+        }
+        Err(e) => Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+            success: false,
+            data: None,
+            error: Some(format!("Broadcast failed: {}", e)),
+        })),
+    }
 }
 
 #[get("/backend-status")]
