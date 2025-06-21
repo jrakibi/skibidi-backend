@@ -12,6 +12,8 @@ use std::str::FromStr;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+const NETWORK: Network = Network::Testnet;
+
 // Function to generate consistent wallet ID from mnemonic
 fn generate_wallet_id(mnemonic: &str) -> String {
     let mut hasher = DefaultHasher::new();
@@ -36,18 +38,18 @@ struct BlockchainBackend {
 // Define multiple blockchain backends for redundancy
 const BLOCKCHAIN_BACKENDS: &[BlockchainBackend] = &[
     BlockchainBackend {
-        name: "Mempool.space",
-        url: "https://mempool.space/api",
+        name: "Mempool.space Testnet",
+        url: "https://mempool.space/testnet/api",
         timeout: 20,
     },
     BlockchainBackend {
-        name: "Blockstream",
-        url: "https://blockstream.info/api",
+        name: "Blockstream Testnet",
+        url: "https://blockstream.info/testnet/api",
         timeout: 20,
     },
     BlockchainBackend {
-        name: "Bitcoin Explorer",
-        url: "https://bitcoin.explorer.com/api",
+        name: "Esplora Testnet",
+        url: "https://blockstream.info/testnet/api",
         timeout: 15,
     },
 ];
@@ -118,6 +120,12 @@ struct PayLnurlRequest {
     amount_msats: u64,
 }
 
+#[derive(Deserialize)]
+struct DemoPaymentNotification {
+    payment_hash: String,
+    amount_msats: u64,
+}
+
 fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatabase>, String), String> {
     let mnemonic = Mnemonic::parse(mnemonic_str)
         .map_err(|e| format!("Invalid mnemonic: {}", e))?;
@@ -125,7 +133,7 @@ fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatab
     let xkey: ExtendedKey = (mnemonic, None).into_extended_key()
         .map_err(|e| format!("Failed to create extended key: {}", e))?;
     
-    let xprv = match xkey.into_xprv(Network::Bitcoin) {
+    let xprv = match xkey.into_xprv(NETWORK) {
         Some(key) => key,
         None => return Err("Failed to create private key".to_string()),
     };
@@ -138,7 +146,7 @@ fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatab
     let wallet = Wallet::new(
         &descriptor,
         None,
-        Network::Bitcoin,
+        NETWORK,
         MemoryDatabase::default(),
     ).map_err(|e| format!("Failed to create wallet: {}", e))?;
 
@@ -423,7 +431,7 @@ async fn send_bitcoin(request: web::Json<SendBitcoinRequest>) -> ActixResult<Htt
 
     // Parse recipient address
     let recipient = match Address::from_str(&request.to_address) {
-        Ok(addr) => match addr.require_network(Network::Bitcoin) {
+        Ok(addr) => match addr.require_network(NETWORK) {
             Ok(checked_addr) => checked_addr,
             Err(e) => return Ok(HttpResponse::BadRequest().json(ApiResponse::<()> {
                 success: false,
@@ -698,12 +706,70 @@ async fn get_lightning_invoices(
     }
 }
 
+#[get("/lightning/node-info")]
+async fn get_lightning_node_info(
+    lightning_storage: web::Data<LightningStorage>
+) -> ActixResult<HttpResponse> {
+    let mut lightning_guard = lightning_storage.lock().unwrap();
+    
+    // Initialize Lightning manager if not exists
+    if lightning_guard.is_none() {
+        match LightningManager::new() {
+            Ok(manager) => *lightning_guard = Some(manager),
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to initialize Lightning: {}", e)),
+            })),
+        }
+    }
+
+    let lightning_manager = lightning_guard.as_ref().unwrap();
+    let node_info = lightning_manager.get_node_info();
+    
+    Ok(HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        data: Some(node_info),
+        error: None,
+    }))
+}
+
+#[post("/lightning/demo-payment")]
+async fn demo_payment_received(
+    request: web::Json<DemoPaymentNotification>,
+    lightning_storage: web::Data<LightningStorage>
+) -> ActixResult<HttpResponse> {
+    println!("⚡ [DEMO] Received payment notification for hash: {}", request.payment_hash);
+    
+    let mut lightning_guard = lightning_storage.lock().unwrap();
+    
+    if lightning_guard.is_none() {
+        match LightningManager::new() {
+            Ok(manager) => *lightning_guard = Some(manager),
+            Err(e) => return Ok(HttpResponse::InternalServerError().json(ApiResponse::<()> {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to initialize Lightning: {}", e)),
+            })),
+        }
+    }
+
+    let lightning_manager = lightning_guard.as_ref().unwrap();
+    lightning_manager.mark_invoice_as_paid(&request.payment_hash, request.amount_msats).await;
+    
+    Ok(HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        data: Some("Demo payment processed successfully"),
+        error: None,
+    }))
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     println!("🚀 Starting Skibidi Wallet Backend (Secure & Stateless)");
     println!("🔒 No sensitive wallet data stored on server");
-    println!("🌐 Network: Mainnet");
-    println!("⚡ Lightning Network: Enabled");
+    println!("🌐 Network: Testnet");
+    println!("⚡ Lightning Network: Enabled (Demo Mode)");
     
     // Initialize Lightning storage (only for Lightning-specific data)
     let lightning_storage = web::Data::new(LightningStorage::new(None));
@@ -727,6 +793,8 @@ async fn main() -> std::io::Result<()> {
             .service(pay_lnurl)
             .service(get_lightning_payments)
             .service(get_lightning_invoices)
+            .service(get_lightning_node_info)
+            .service(demo_payment_received)
     })
     .bind("0.0.0.0:8080")?
     .run()

@@ -225,6 +225,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "android-tzdata"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e999941b234f3131b00bc13c22d06e8c5ff726d1b6318ac7eb276997bbb4fef0"
+
+[[package]]
+name = "android_system_properties"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "819e7219dbd41043ac279b19830f2efc897156490d7fd6ea916720117ee66311"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -283,7 +298,7 @@ dependencies = [
  "async-trait",
  "bdk-macros 0.6.0",
  "bip39",
- "bitcoin 0.30.2",
+ "bitcoin",
  "esplora-client",
  "getrandom 0.2.16",
  "js-sys",
@@ -336,17 +351,6 @@ dependencies = [
 
 [[package]]
 name = "bitcoin"
-version = "0.29.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0694ea59225b0c5f3cb405ff3f670e4828358ed26aec49dc352f730f0cb1a8a3"
-dependencies = [
- "bech32",
- "bitcoin_hashes 0.11.0",
- "secp256k1 0.24.3",
-]
-
-[[package]]
-name = "bitcoin"
 version = "0.30.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1945a5048598e4189e239d3f809b19bdad4845c4b2ba400d304d2dcf26d2c462"
@@ -356,7 +360,7 @@ dependencies = [
  "bitcoin-private",
  "bitcoin_hashes 0.12.0",
  "hex_lit",
- "secp256k1 0.27.0",
+ "secp256k1",
  "serde",
 ]
 
@@ -377,12 +381,6 @@ name = "bitcoin-private"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73290177011694f38ec25e165d0387ab7ea749a4b81cd4c80dae5988229f7a57"
-
-[[package]]
-name = "bitcoin_hashes"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90064b8dee6815a6470d60bad07bbbaee885c0e12d04177138fa3291a01b7bc4"
 
 [[package]]
 name = "bitcoin_hashes"
@@ -489,6 +487,21 @@ name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+
+[[package]]
+name = "chrono"
+version = "0.4.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d"
+dependencies = [
+ "android-tzdata",
+ "iana-time-zone",
+ "js-sys",
+ "num-traits",
+ "serde",
+ "wasm-bindgen",
+ "windows-link",
+]
 
 [[package]]
 name = "cookie"
@@ -627,7 +640,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cb1f7f2489cce83bc3bd92784f9ba5271eeb6e729b975895fc541f78cbfcdca"
 dependencies = [
- "bitcoin 0.30.2",
+ "bitcoin",
  "bitcoin-internals 0.1.0",
  "log",
  "serde",
@@ -879,6 +892,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "iana-time-zone"
+version = "0.1.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0c919e5debc312ad217002b8048a17b7d83f80703865bbfcfebb0458b0b27d8"
+dependencies = [
+ "android_system_properties",
+ "core-foundation-sys",
+ "iana-time-zone-haiku",
+ "js-sys",
+ "log",
+ "wasm-bindgen",
+ "windows-core",
+]
+
+[[package]]
+name = "iana-time-zone-haiku"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1047,67 +1084,67 @@ checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "lightning"
-version = "0.0.118"
+version = "0.0.121"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d52cec5fa9382154fe9671e8df93095b800c7d77abc66e2a5ef839d672521c5e"
+checksum = "5b0c1f811ae288f86c6767055c55b5f7a721ca1e61bf1897a9ae2ec663e8aba1"
 dependencies = [
- "bitcoin 0.29.2",
+ "bitcoin",
+ "hex-conservative",
 ]
 
 [[package]]
 name = "lightning-background-processor"
-version = "0.0.118"
+version = "0.0.121"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "783150db7ad7b822e8029eae749123a377ed728b513a1610c3d9d3b31252da3e"
+checksum = "57d4711ad9cc33f30c2e8e876fcfd6255523fc250440abb8c374cd98e6c40e79"
 dependencies = [
- "bitcoin 0.29.2",
+ "bitcoin",
  "lightning",
  "lightning-rapid-gossip-sync",
 ]
 
 [[package]]
 name = "lightning-invoice"
-version = "0.26.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eb24878b0f4ef75f020976c886d9ad1503867802329cc963e0ab4623ea3b25c"
+checksum = "5b186aca4a605d4db3b85979922be287b9ebd5dedd8132963bb9dbeb8f7d2a04"
 dependencies = [
  "bech32",
- "bitcoin 0.29.2",
- "bitcoin_hashes 0.11.0",
+ "bitcoin",
  "lightning",
  "num-traits",
- "secp256k1 0.24.3",
+ "secp256k1",
 ]
 
 [[package]]
 name = "lightning-net-tokio"
-version = "0.0.118"
+version = "0.0.121"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86ee02c5a817b46a5fd6de4b2e196b58ae0e6eca5f3b8a6f0b0cd67bd9485ecc"
+checksum = "4813cca14ed984924a6975895e80cde8673a0a105a1c7ddf3b0fb3d1ce59e6bf"
 dependencies = [
- "bitcoin 0.29.2",
+ "bitcoin",
  "lightning",
  "tokio",
 ]
 
 [[package]]
 name = "lightning-persister"
-version = "0.0.118"
+version = "0.0.121"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85ec1734f931d819ab51b7000d792f69c7d0602eb75ddc59cb6ea22c8b0c3461"
+checksum = "a82a633e4d08b75e16dc131af2961254b7005c30ab29577e215080d2943c0511"
 dependencies = [
- "bitcoin 0.29.2",
+ "bitcoin",
  "lightning",
  "windows-sys 0.48.0",
 ]
 
 [[package]]
 name = "lightning-rapid-gossip-sync"
-version = "0.0.118"
+version = "0.0.121"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac66654c7593a16277cd9f1b7a078729318cad5cee2fe8948a2df4f756decb73"
+checksum = "128d6c450cb698b46ecacc6645ebeb2b57d6f9458482635ab523863fa8378314"
 dependencies = [
- "bitcoin 0.29.2",
+ "bitcoin",
  "lightning",
 ]
 
@@ -1174,7 +1211,7 @@ version = "10.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed79b0a9f0df0269dd7971298ad2d2a77da7674e8451c9b5b7da0972de87a438"
 dependencies = [
- "bitcoin 0.30.2",
+ "bitcoin",
  "bitcoin-private",
  "serde",
 ]
@@ -1635,33 +1672,14 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "secp256k1"
-version = "0.24.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b1629c9c557ef9b293568b338dddfc8208c98a18c59d722a9d53f859d9c9b62"
-dependencies = [
- "bitcoin_hashes 0.11.0",
- "secp256k1-sys 0.6.1",
-]
-
-[[package]]
-name = "secp256k1"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25996b82292a7a57ed3508f052cfff8640d38d32018784acd714758b43da9c8f"
 dependencies = [
  "bitcoin_hashes 0.12.0",
  "rand 0.8.5",
- "secp256k1-sys 0.8.1",
+ "secp256k1-sys",
  "serde",
-]
-
-[[package]]
-name = "secp256k1-sys"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83080e2c2fc1006e625be82e5d1eb6a43b7fd9578b617fcc55814daf286bba4b"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -1774,7 +1792,9 @@ dependencies = [
  "base64 0.21.7",
  "bdk",
  "bdk-macros 0.5.0",
- "bitcoin 0.29.2",
+ "bech32",
+ "bitcoin",
+ "chrono",
  "hex",
  "lightning",
  "lightning-background-processor",
@@ -1784,7 +1804,7 @@ dependencies = [
  "lightning-rapid-gossip-sync",
  "rand 0.8.5",
  "reqwest",
- "secp256k1 0.24.3",
+ "secp256k1",
  "serde",
  "serde_json",
  "tokio",
@@ -2300,6 +2320,65 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "windows-core"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0fdd3ddb90610c7638aa2b3a3ab2904fb9e5cdbecc643ddb3647212781c4ae3"
+dependencies = [
+ "windows-implement",
+ "windows-interface",
+ "windows-link",
+ "windows-result",
+ "windows-strings",
+]
+
+[[package]]
+name = "windows-implement"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a47fddd13af08290e67f4acabf4b459f647552718f683a7b415d290ac744a836"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.59.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd9211b69f8dcdfa817bfd14bf1c97c9188afa36f4750130fcdf3f400eca9fa8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
+name = "windows-link"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e6ad25900d524eaabdbbb96d20b4311e1e7ae1699af4fb28c17ae66c80d798a"
+
+[[package]]
+name = "windows-result"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56f42bd332cc6c8eac5af113fc0c1fd6a8fd2aa08a0119358686e5160d0586c6"
+dependencies = [
+ "windows-link",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
+dependencies = [
+ "windows-link",
+]
 
 [[package]]
 name = "windows-sys"
