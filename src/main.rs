@@ -12,7 +12,7 @@ use std::str::FromStr;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-const NETWORK: Network = Network::Testnet;
+const NETWORK: Network = Network::Bitcoin;
 
 // Function to generate consistent wallet ID from mnemonic
 fn generate_wallet_id(mnemonic: &str) -> String {
@@ -38,18 +38,18 @@ struct BlockchainBackend {
 // Define multiple blockchain backends for redundancy
 const BLOCKCHAIN_BACKENDS: &[BlockchainBackend] = &[
     BlockchainBackend {
-        name: "Mempool.space Testnet",
-        url: "https://mempool.space/testnet/api",
+        name: "Mempool.space Mainnet",
+        url: "https://mempool.space/api",
         timeout: 20,
     },
     BlockchainBackend {
-        name: "Blockstream Testnet",
-        url: "https://blockstream.info/testnet/api",
+        name: "Blockstream Mainnet",
+        url: "https://blockstream.info/api",
         timeout: 20,
     },
     BlockchainBackend {
-        name: "Esplora Testnet",
-        url: "https://blockstream.info/testnet/api",
+        name: "Esplora Mainnet",
+        url: "https://blockstream.info/api",
         timeout: 15,
     },
 ];
@@ -768,7 +768,7 @@ async fn demo_payment_received(
 async fn main() -> std::io::Result<()> {
     println!("🚀 Starting Skibidi Wallet Backend (Secure & Stateless)");
     println!("🔒 No sensitive wallet data stored on server");
-    println!("🌐 Network: Testnet");
+    println!("🌐 Network: Mainnet");
     println!("⚡ Lightning Network: Enabled (Demo Mode)");
     
     // Initialize Lightning storage (only for Lightning-specific data)

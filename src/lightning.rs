@@ -166,7 +166,7 @@ impl LightningManager {
             .map_err(|_| "Failed to get current time")?;
         
         // Create invoice using lightning-invoice
-        let currency = Currency::BitcoinTestnet;
+        let currency = Currency::Bitcoin;
         let mut invoice_builder = InvoiceBuilder::new(currency)
             .description(description.clone())
             .payment_hash(bitcoin::hashes::sha256::Hash::from_byte_array(payment_hash.0))
@@ -361,7 +361,7 @@ impl LightningManager {
     pub fn get_node_info(&self) -> HashMap<String, String> {
         let mut info = HashMap::new();
         info.insert("node_id".to_string(), hex::encode(self.node_id.serialize()));
-        info.insert("network".to_string(), "testnet".to_string());
+        info.insert("network".to_string(), "mainnet".to_string());
         info.insert("implementation".to_string(), "LDK-based".to_string());
         info
     }
