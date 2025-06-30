@@ -138,8 +138,8 @@ fn create_wallet_from_mnemonic(mnemonic_str: &str) -> Result<(Wallet<MemoryDatab
         None => return Err("Failed to create private key".to_string()),
     };
     
-    // Use no derivation path - just the master private key directly
-    let descriptor = format!("wpkh({})", xprv);
+    // Use standard BIP84 derivation path for native SegWit
+    let descriptor = format!("wpkh({}/84'/0'/0'/0/*)", xprv);
     
     println!("🔑 Creating wallet from mnemonic (descriptor hidden for security)");
     
